@@ -1,0 +1,365 @@
+---
+title: "dubairealestate"
+author: "nursa"
+date: "2026-05-29"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# 1. Load Library
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(readr)
+
+# 2. Load Dataset
+dataarea <- read_csv("area_prices_monthly (1).csv", show_col_types = FALSE)
+
+# 3. Data Cleaning
+dataarea_clean <- dataarea %>%
+  mutate(
+    date = ymd(paste0(year_month, "-01")),
+    secondary_price_per_sqft_usd = as.numeric(secondary_price_per_sqft_usd)
+  ) %>%
+  filter(!is.na(date), !is.na(secondary_price_per_sqft_usd))
+
+# 4. Data Transformation (Segmentasi)
+community_stats <- dataarea_clean %>%
+  group_by(community) %>%
+  summarise(avg_price = mean(secondary_price_per_sqft_usd, na.rm = TRUE))
+
+q33 <- quantile(community_stats$avg_price, 0.33, na.rm = TRUE)
+q66 <- quantile(community_stats$avg_price, 0.66, na.rm = TRUE)
+
+community_stats <- community_stats %>%
+  mutate(market_segment = case_when(
+    avg_price >= q66 ~ "1. High-End / Premium",
+    avg_price >= q33 ~ "2. Mid-Market",
+    TRUE ~ "3. Affordable"
+  ))
+
+dataarea_segmented <- dataarea_clean %>%
+  left_join(community_stats %>% select(community, market_segment), by = "community") %>%
+  group_by(date, market_segment) %>%
+  summarise(
+    avg_monthly_price = mean(secondary_price_per_sqft_usd, na.rm = TRUE), 
+    .groups = 'drop'
+  )
+
+# 5. Visualisasi ggplot Murni
+p <- ggplot(dataarea_segmented, aes(x = date, y = avg_monthly_price, color = market_segment)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 1.5, alpha = 0.5) +
+  scale_color_manual(values = c("1. High-End / Premium" = "#D4AF37", 
+                                "2. Mid-Market" = "#2980B9", 
+                                "3. Affordable" = "#27AE60")) +
+  scale_y_continuous(labels = label_dollar(prefix = "$")) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  labs(
+    title = "Tren Harga Properti Sekunder Dubai Berdasarkan Segmen",
+    subtitle = "Agregasi Rata-rata Harga per Sqft (USD)",
+    x = "Tahun",
+    y = "Harga (USD / Sqft)",
+    color = "Segmen Pasar"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    legend.position = "bottom"
+  )
+
+# 6. Tampilkan Grafik
+print(p)
+```
+Berdasarkan visualisasi tren harga properti periode 2020–2026, terlihat bahwa pasar real estate Dubai mengalami perubahan yang sangat signifikan dalam beberapa tahun terakhir. Grafik menunjukkan pola pergerakan harga pada tiga kategori pasar properti, yaitu segmen premium, menengah, dan terjangkau.
+
+Pada awal periode tahun 2020 hingga awal 2021, seluruh kategori properti mengalami penurunan harga. Kondisi ini berkaitan dengan pandemi COVID-19 yang menyebabkan ketidakpastian ekonomi global dan menurunkan aktivitas investasi di sektor properti. Penurunan tersebut terlihat hampir merata pada seluruh kategori pasar.
+
+Memasuki pertengahan tahun 2021 hingga akhir 2023, pasar mulai mengalami pemulihan yang sangat kuat. Harga properti meningkat secara signifikan, terutama pada segmen premium yang menunjukkan kenaikan paling tajam dibanding kategori lainnya. Fenomena ini dipengaruhi oleh beberapa faktor besar seperti penyelenggaraan Expo 2020 Dubai, peningkatan arus investor asing, serta kebijakan Golden Visa yang mendorong permintaan properti dari investor internasional dan ekspatriat berpenghasilan tinggi. Sementara itu, segmen menengah dan terjangkau juga mengalami kenaikan harga, namun dengan pertumbuhan yang lebih stabil dan tidak seagresif pasar premium. Hal ini menunjukkan bahwa dampak dari arus modal internasional lebih besar dirasakan oleh area dan properti kelas atas.
+
+Mulai tahun 2024 hingga 2026, grafik menunjukkan bahwa pertumbuhan harga mulai melambat dan bergerak lebih stabil. Kondisi ini mengindikasikan fase *market cooling* atau pendinginan pasar, di mana harga properti tidak lagi mengalami lonjakan ekstrem seperti periode sebelumnya. Walaupun demikian, harga tetap bertahan pada level yang relatif tinggi dan tidak mengalami penurunan drastis. Salah satu temuan paling penting dari visualisasi ini adalah semakin lebarnya jarak antara segmen premium dengan segmen lainnya dari tahun ke tahun. Pada awal periode, perbedaan harga antar kategori masih relatif dekat, namun pada akhir periode segmen premium meningkat jauh lebih tinggi dibanding pasar menengah dan terjangkau. Temuan ini menunjukkan bahwa peristiwa ekonomi besar dan arus investasi global memberikan dampak paling signifikan terhadap properti kelas atas di Dubai. Dengan kata lain, area premium menjadi sektor yang paling diuntungkan selama periode pertumbuhan pasar pasca-pandemi.
+
+Secara keseluruhan, grafik ini memperlihatkan bahwa pasar properti Dubai memiliki sensitivitas yang tinggi terhadap faktor makroekonomi dan kebijakan pemerintah, serta menunjukkan bagaimana segmen premium mampu tumbuh lebih cepat dibandingkan kategori pasar lainnya selama periode 2020–2026.
+```{r Correlation_Analysis}
+# ==============================================================================
+# PHASE 1B: CORRELATION ANALYSIS (Harga vs Suku Bunga KPR)
+# ==============================================================================
+
+# 1. Menyiapkan Data Agregasi Bulanan untuk Harga dan Suku Bunga (Mortgage)
+correlation_data <- dataarea_clean %>%
+  left_join(community_stats %>% select(community, market_segment), by = "community") %>%
+  group_by(date, market_segment) %>%
+  summarise(
+    avg_monthly_price = mean(secondary_price_per_sqft_usd, na.rm = TRUE),
+    # Mengambil rata-rata suku bunga per bulan
+    avg_mortgage = mean(avg_mortgage_rate_pct, na.rm = TRUE), 
+    .groups = 'drop'
+  )
+
+# 2. Visualisasi Scatter Plot dengan Garis Regresi Linier
+corr_plot <- ggplot(correlation_data, aes(x = avg_mortgage, y = avg_monthly_price, color = market_segment)) +
+  # Menambahkan titik data sebaran
+  geom_point(alpha = 0.6, size = 2) +
+  # Menambahkan garis tren (regresi linier) untuk melihat arah korelasi
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1, linetype = "dashed") +
+  scale_color_manual(values = c("1. High-End / Premium" = "#D4AF37", 
+                                "2. Mid-Market" = "#2980B9", 
+                                "3. Affordable" = "#27AE60")) +
+  scale_y_continuous(labels = scales::label_dollar(prefix = "$")) +
+  # Memformat sumbu X menjadi persentase
+  scale_x_continuous(labels = function(x) paste0(x, "%")) +
+  labs(
+    title = "Korelasi Suku Bunga KPR terhadap Harga Properti",
+    subtitle = "Analisis Sensitivitas Pasar terhadap Kebijakan Suku Bunga Makro",
+    x = "Rata-rata Suku Bunga KPR (Mortgage Rate)",
+    y = "Harga Rata-rata (USD / Sqft)",
+    color = "Segmen Pasar"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(color = "gray40", margin = margin(b = 15)),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom"
+  )
+
+# 3. Tampilkan Grafik
+print(corr_plot)
+```
+Visualisasi ini dibuat untuk menguji sebuah teori ekonomi dasar: jika bunga cicilan bank (KPR) sedang mahal, harga properti seharusnya stagnan atau turun karena masyarakat menahan diri untuk meminjam uang. Namun, grafik ini justru menampilkan anomali pasar yang mengejutkan. Ketika rata-rata suku bunga merangkak naik dari 2% hingga hampir 7%, garis tren harga di Dubai—alih-alih menurun—malah ikut meroket. Fakta paling mencolok terlihat pada garis emas (segmen Premium) yang menanjak paling tajam dan sama sekali tidak terpengaruh oleh mahalnya bunga bank. Temuan ini memberikan satu kesimpulan tajam: pasar properti mewah di Dubai ternyata kebal terhadap kebijakan suku bunga lokal karena mayoritas transaksinya diborong oleh investor asing menggunakan uang tunai (*cash* keras). Kenaikan bunga bank pada akhirnya hanya menghambat laju pertumbuhan properti di kelas bawah (garis hijau yang pertumbuhannya paling landai), karena hanya kelompok masyarakat inilah yang masih sangat bergantung pada pinjaman bank untuk bisa membeli rumah.
+
+
+```{r}
+# 1. Load Library
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(readr)
+
+# 2. Load Dataset
+dataarea <- read_csv("area_prices_monthly (1).csv", show_col_types = FALSE)
+
+# 3. Data Cleaning
+dataarea_clean <- dataarea %>%
+  mutate(
+    date = ymd(paste0(year_month, "-01")),
+    secondary_price_per_sqft_usd = as.numeric(secondary_price_per_sqft_usd)
+  ) %>%
+  filter(!is.na(date), !is.na(secondary_price_per_sqft_usd))
+
+# 4. Data Transformation (Segmentasi)
+community_stats <- dataarea_clean %>%
+  group_by(community) %>%
+  summarise(avg_price = mean(secondary_price_per_sqft_usd, na.rm = TRUE))
+
+q33 <- quantile(community_stats$avg_price, 0.33, na.rm = TRUE)
+q66 <- quantile(community_stats$avg_price, 0.66, na.rm = TRUE)
+
+community_stats <- community_stats %>%
+  mutate(market_segment = case_when(
+    avg_price >= q66 ~ "1. High-End / Premium",
+    avg_price >= q33 ~ "2. Mid-Market",
+    TRUE ~ "3. Affordable"
+  ))
+
+dataarea_segmented <- dataarea_clean %>%
+  left_join(community_stats %>% select(community, market_segment), by = "community") %>%
+  group_by(date, market_segment) %>%
+  summarise(
+    avg_monthly_price = mean(secondary_price_per_sqft_usd, na.rm = TRUE), 
+    .groups = 'drop'
+  )
+
+# ==============================================================================
+# TAMBAHAN BARU: Menyiapkan Data Event Makroekonomi
+# ==============================================================================
+macro_events <- data.frame(
+  date = ymd(c("2020-03-01", "2021-10-01", "2022-10-01", "2024-01-01")),
+  event_name = c("COVID-19 Dip", "Expo 2020", "Golden Visa Spike", "Market Cooling")
+)
+
+# 5. Visualisasi ggplot Murni + Anotasi Event
+p <- ggplot(dataarea_segmented, aes(x = date, y = avg_monthly_price)) +
+  # A. Tambahkan garis vertikal event LEBIH DULU agar posisinya di belakang garis tren
+  geom_vline(data = macro_events, aes(xintercept = as.numeric(date)), 
+             linetype = "dashed", color = "black", alpha = 0.5, linewidth = 0.7) +
+  
+  # B. Tambahkan teks label untuk setiap garis vertikal
+  geom_text(data = macro_events, aes(x = date, y = Inf, label = event_name),
+            angle = 90, vjust = -0.5, hjust = 1.1, color = "black", 
+            size = 4, fontface = "italic", inherit.aes = FALSE) +
+  
+  # C. Garis tren harga
+  geom_line(aes(color = market_segment), linewidth = 1) +
+  geom_point(aes(color = market_segment), size = 1.5, alpha = 0.5) +
+  
+  # D. Estetika warna dan skala
+  scale_color_manual(values = c("1. High-End / Premium" = "#D4AF37", 
+                                "2. Mid-Market" = "#2980B9", 
+                                "3. Affordable" = "#27AE60")) +
+  scale_y_continuous(labels = label_dollar(prefix = "$")) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y") +
+  labs(
+    title = "Tren Harga Properti Sekunder Dubai Berdasarkan Segmen",
+    subtitle = "Dengan Anotasi Guncangan Makroekonomi (2020-2026)",
+    x = "Tahun",
+    y = "Harga (USD / Sqft)",
+    color = "Segmen Pasar"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(color = "gray40", margin = margin(b = 15)),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = "bottom"
+  )
+
+# 6. Tampilkan Grafik
+print(p)
+```
+## Hasil Visualisasi Tren Harga Properti Dubai (2020–2026)
+
+Berdasarkan grafik visualisasi, terlihat bahwa pasar properti Dubai mengalami perubahan harga yang cukup besar selama periode 2020 hingga 2026. Grafik membandingkan tiga segmen pasar properti, yaitu **High-End/Premium**, **Mid-Market**, dan **Affordable**, sehingga dapat menunjukkan bagaimana setiap kategori merespons kondisi ekonomi dan perubahan pasar secara berbeda.
+
+Pada awal tahun 2020, seluruh segmen properti mengalami penurunan harga yang terlihat dari garis tren yang sempat menurun. Kondisi ini terjadi akibat pandemi COVID-19 yang menyebabkan ketidakpastian ekonomi global dan menurunkan aktivitas investasi properti. Banyak investor dan pembeli menunda transaksi karena kondisi pasar yang belum stabil.
+
+Setelah memasuki tahun 2021, pasar mulai menunjukkan pemulihan secara bertahap. Kenaikan harga mulai terlihat pada semua segmen, terutama setelah berlangsungnya Expo 2020 yang meningkatkan aktivitas ekonomi dan menarik kembali minat investor ke Dubai. Pada fase ini, pasar properti mulai kembali bergerak positif setelah tekanan pandemi mulai berkurang.
+
+Kenaikan paling signifikan terjadi pada periode 2022 hingga 2023. Segmen **High-End/Premium** mengalami pertumbuhan harga yang sangat tajam dibandingkan segmen lainnya. Hal ini dipengaruhi oleh meningkatnya arus modal asing dan kebijakan Golden Visa yang memberikan kemudahan bagi investor internasional untuk tinggal dan berinvestasi di Dubai. Kondisi tersebut menyebabkan permintaan properti premium meningkat sangat tinggi, sehingga harga pada segmen ini melonjak lebih cepat dibanding pasar menengah dan affordable.
+
+Sementara itu, segmen **Mid-Market** dan **Affordable** juga mengalami kenaikan harga, namun pertumbuhannya cenderung lebih stabil dan tidak seagresif pasar premium. Hal ini menunjukkan bahwa dampak investasi internasional lebih dominan pada properti kelas atas dibandingkan properti dengan harga menengah atau terjangkau.
+
+Memasuki tahun 2024 hingga 2026, grafik menunjukkan bahwa pertumbuhan harga mulai melambat dan bergerak lebih stabil. Kondisi ini dikenal sebagai *market cooling*, yaitu fase ketika pasar mulai menyesuaikan diri setelah mengalami kenaikan yang sangat tinggi pada periode sebelumnya. Meskipun pertumbuhan tidak lagi setajam tahun 2022–2023, harga properti tetap berada pada level yang relatif tinggi dan tidak mengalami penurunan drastis.
+
+Salah satu temuan utama dari grafik ini adalah semakin lebarnya jarak antara segmen premium dengan segmen lainnya dari tahun ke tahun. Pada awal periode, perbedaan harga antar segmen masih relatif dekat, namun pada akhir periode segmen premium meningkat jauh lebih tinggi dibanding Mid-Market dan Affordable. Hal ini menunjukkan bahwa peristiwa ekonomi besar dan arus investasi global memberikan dampak paling besar terhadap properti kelas atas di Dubai.
+
+Secara keseluruhan, visualisasi ini memperlihatkan bahwa pasar properti Dubai sangat dipengaruhi oleh faktor makroekonomi, kebijakan pemerintah, dan arus investasi internasional. Selain itu, segmen premium terbukti menjadi sektor yang mengalami pertumbuhan paling cepat selama periode pemulihan pasar pasca-pandemi.
+
+
+```{r}
+# ==============================================================================
+# PHASE 2: TIME SERIES FORECASTING MENGGUNAKAN ARIMA
+# ==============================================================================
+
+# 1. Load Library Forecasting Modern
+library(tsibble)
+library(fable)
+library(fabletools)
+
+# 2. Konversi Data ke Format Time Series (tsibble)
+# ARIMA membutuhkan format waktu yang terstruktur sempurna tanpa jeda.
+data_ts <- dataarea_segmented %>%
+  # Mengubah format Date biasa menjadi format bulan-tahun spesifik untuk time series
+  mutate(month_index = yearmonth(date)) %>%
+  # Menjadikan 'market_segment' sebagai kunci agar R memisahkan prediksi untuk tiap segmen
+  as_tsibble(index = month_index, key = market_segment)
+
+# 3. Pelatihan Model (Model Fitting)
+# Fungsi ARIMA() di sini beroperasi secara otomatis (Auto-ARIMA).
+# Ia akan mengevaluasi ratusan kombinasi parameter (p, d, q) dan memilih 
+# model dengan nilai kesalahan (AICc) paling rendah untuk masing-masing segmen.
+fit_arima <- data_ts %>%
+  model(arima_model = ARIMA(avg_monthly_price))
+
+# 4. Melakukan Prediksi (Forecasting)
+# Kita memproyeksikan pergerakan harga untuk 12 bulan (1 tahun) ke depan.
+forecast_12m <- fit_arima %>%
+  forecast(h = "12 months")
+
+# 5. Visualisasi Hasil Prediksi
+forecast_plot <- forecast_12m %>%
+  # Menggabungkan data asli (data_ts) dengan data prediksi
+  # Menampilkan Confidence Interval (level = 80 dan 95)
+  autoplot(data_ts, level = c(80, 95), alpha = 0.6) +
+  scale_y_continuous(labels = scales::label_dollar(prefix = "$")) +
+  labs(
+    title = "Proyeksi Harga Properti Dubai (12 Bulan ke Depan)",
+    subtitle = "Forecasting menggunakan Auto-ARIMA dengan Interval Kepercayaan 80% & 95%",
+    x = "Tahun",
+    y = "Harga (USD / Sqft)",
+    fill = "Interval Kepercayaan",
+    color = "Segmen Pasar"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(color = "gray40", margin = margin(b = 15)),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = "bottom"
+  )
+
+# 6. Tampilkan Grafik Forecasting
+print(forecast_plot)
+```
+Grafik hasil prediksi (*forecasting*) ini memberikan gambaran yang sangat jelas tentang masa depan pasar properti Dubai untuk 12 bulan ke depan, di mana sistem secara otomatis memecah prediksi ke dalam tiga kelas: Mewah (*High-End*), Menengah (*Mid-Market*), dan Terjangkau (*Affordable*). Berdasarkan ujung kanan dari ketiga garis lintasan tersebut, kita bisa melihat bahwa pasar properti Dubai diprediksi akan memasuki fase tenang dan stabil. Setelah mengalami kenaikan harga yang sangat tajam pada periode 2021 hingga 2023 akibat berbagai kejutan ekonomi, algoritma membaca bahwa tren ke depannya tidak akan mengalami lonjakan liar maupun kejatuhan parah. Sebaliknya, harga akan bergerak mendatar dan cenderung bertahan di posisi atasnya saat ini untuk ketiga kelas properti tersebut, memberikan sinyal bahwa pasar sedang mendingin (*cooling down*) namun tetap kuat.
+
+Di bagian bawah grafik, terdapat keterangan interval kepercayaan (*confidence interval*) sebesar 80% dan 95% yang sengaja digunakan karena memprediksi harga masa depan dengan hanya satu angka pasti adalah tindakan yang gegabah dan tidak masuk akal di dunia nyata. Angka 80% mewakili skenario realistis atau kondisi normal bisnis; artinya, jika pasar berjalan seperti biasa tanpa ada kejadian luar biasa, kita yakin 80% bahwa harga properti akan bergerak naik-turun secara wajar di dalam batas rentang tersebut. Sementara itu, angka 95% mewakili skenario ekstrem atau batas kewaspadaan untuk mengukur risiko terburuk; yang berarti meskipun nantinya ada guncangan ekonomi yang mendadak, kita bisa 95% yakin harganya tidak akan anjlok atau melonjak melewati batas rentang tersebut. Melalui pendekatan ini, kita memberikan wawasan kepada pembaca bahwa hasil analisis ini tidak sekadar menebak-nebak, melainkan sebuah proyeksi terukur yang sudah mengamankan investor dari berbagai kemungkinan risiko ketidakpastian di masa depan.
+
+```{r}
+# ==============================================================================
+# PHASE 3: EVENT IMPACT ANALYSIS (Dampak Kebijakan Golden Visa)
+# ==============================================================================
+
+# 1. Menyiapkan Data Sebelum dan Sesudah Golden Visa (Cut-off: Okt 2022)
+impact_data <- dataarea_segmented %>%
+  # Mengambil jendela waktu 1 tahun sebelum dan 1 tahun sesudah
+  filter(date >= ymd("2021-10-01") & date <= ymd("2023-09-01")) %>%
+  mutate(
+    period = case_when(
+      date < ymd("2022-10-01") ~ "1. Sebelum Golden Visa",
+      date >= ymd("2022-10-01") ~ "2. Sesudah Golden Visa"
+    )
+  ) %>%
+  group_by(market_segment, period) %>%
+  summarise(avg_price = mean(avg_monthly_price, na.rm = TRUE), .groups = 'drop')
+
+# 2. Visualisasi Dampak (Bar Chart)
+impact_plot <- ggplot(impact_data, aes(x = market_segment, y = avg_price, fill = period)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.9) +
+  geom_text(aes(label = scales::dollar(avg_price, accuracy = 1)), 
+            position = position_dodge(width = 0.9), vjust = -0.5, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c("1. Sebelum Golden Visa" = "#BDC3C7", 
+                               "2. Sesudah Golden Visa" = "#D4AF37")) +
+ scale_y_continuous(labels = scales::label_dollar(prefix = "$"), expand = expansion(mult = c(0, 0.15))) +
+  labs(
+    title = "Lonjakan Harga Properti Akibat Kebijakan Golden Visa",
+    subtitle = "Perbandingan Rata-rata Harga (1 Tahun Sebelum vs 1 Tahun Sesudah)",
+    x = "Segmen Pasar",
+    y = "Rata-rata Harga (USD / Sqft)",
+    fill = "Periode"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    panel.grid.major.x = element_blank(),
+    legend.position = "bottom"
+  )
+
+# 3. Tampilkan Grafik
+print(impact_plot)
+```
+Berdasarkan visualisasi data di atas, seluruh segmen properti di Dubai mengalami peningkatan harga pasca-pemberlakuan kebijakan Golden Visa. Namun, terdapat perbedaan yang sangat signifikan pada besaran nominal kenaikannya antar kelas aset:
+1. Segmen Affordable (Terjangkau): Harga rata-rata mengalami kenaikan yang moderat, yaitu sebesar $52/sqft (bergeser dari $218 menjadi $270).
+2. Segmen High-End / Premium: Harga rata-rata mencatat pertumbuhan yang jauh lebih agresif dengan kenaikan mencapai $174/sqft (melonjak dari $716 menjadi $890).
+
+Secara kuantitatif, data ini mengindikasikan bahwa aliran modal asing yang masuk melalui program Golden Visa mayoritas dialokasikan pada aset properti mewah. Dampak struktural dari tren ini adalah semakin melebarnya kesenjangan nilai aset di pasar properti Dubai; di mana harga properti kelas atas tumbuh jauh lebih cepat dan menciptakan jarak yang semakin jauh dibandingkan dengan properti kelas menengah dan terjangkau.
+
+
+Rekomendasi akhir :
+*Bagi Investor: Hindari Membeli di "Harga Pucuk"*
+Data forecasting secara jelas menunjukkan bahwa segmen High-End sudah mencapai titik jenuhnya dan akan bergerak mendatar. Membeli properti mewah saat ini untuk tujuan flipping (beli dan jual cepat) sangat berisiko karena harganya sudah berada di puncak. Strategi terbaik saat ini adalah mengalihkan modal ke properti kelas menengah (Mid-Market). Ekspatriat profesional yang "terlempar" dari area premium akibat lonjakan harga gila-gilaan pada 2022–2023 kini beralih mencari hunian di area menengah. Hal ini menjanjikan kestabilan permintaan dan keuntungan sewa (rental yield) yang jauh lebih masuk akal.
+
+*Bagi Developer: Antisipasi Siklus Suku Bunga Berikutnya*
+Analisis korelasi membuktikan bahwa pasar kelas menengah dan terjangkau sangat sensitif terhadap suku bunga KPR. Daripada terus meluncurkan proyek ultra-luxury yang pasarnya mulai mendingin, developer disarankan untuk mulai mengamankan lahan dan merancang proyek off-plan (pra-jual) di kelas Mid-Market. Jika bank sentral global mulai menurunkan suku bunga pinjaman di masa depan, kelompok masyarakat menengah ini akan kembali memiliki daya beli cicilan. Developer yang sudah menyiapkan stok rumah menengah saat momen itu tiba akan menjadi pihak yang paling diuntungkan dari gelombang pemulihan pasar berikutnya.
+
+*Bagi Agen Properti (Real Estate Agencies): Ubah Strategi dari Margin ke Volume*
+Dalam masa "pesta" 2022–2023, agen properti bisa hidup nyaman hanya dengan menjual 1 atau 2 unit properti ultra-luxury karena komisi (margin) yang sangat besar. Namun, dengan indikasi market cooling dan stagnasi di segmen Premium, strategi ini tidak lagi relevan. Agen dan firma brokerage harus segera melakukan pivot kampanye pemasaran secara agresif ke segmen Mid-Market. Bertahan di pasar yang sedang mendingin berarti harus mengubah permainan dari "mencari margin besar dari sedikit pembeli" menjadi "mengejar volume transaksi yang tinggi dari banyak pekerja profesional dan keluarga kelas menengah".
